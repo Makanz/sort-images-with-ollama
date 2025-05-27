@@ -1,9 +1,6 @@
 {
     "name": "Sort Images with Ollama",
-    "build": {
-        "dockerfile": "Dockerfile",
-        "context": ".."
-    },
+    "image": "mcr.microsoft.com/devcontainers/python:1-3.9-bullseye",
     "settings": {
         "python.pythonPath": "/usr/local/bin/python"
     },
