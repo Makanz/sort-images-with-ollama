@@ -31,6 +31,21 @@ sort-images-with-ollama
 3. **Install Dependencies**
    - The development container will automatically install the required Python dependencies specified in the `Dockerfile`.
 
+## Configuration
+
+This project uses a `.env` file for configuration. To get started:
+
+1.  Copy the example configuration file:
+    ```bash
+    cp .env.example .env
+    ```
+2.  Customize the values in the `.env` file as needed. The available variables are:
+    *   `OLLAMA_HOST`: The URL of the Ollama API. Defaults to `http://host.docker.internal:11434`.
+    *   `INPUT_FOLDER`: The directory where images to be sorted are located. Defaults to `images`.
+    *   `BAD_QUALITY_FOLDER_NAME`: The name of the folder to store bad quality images. Defaults to `bad_quality`.
+    *   `OK_QUALITY_FOLDER_NAME`: The name of the folder to store good quality images. Defaults to `ok`.
+    *   `MODEL_NAME`: The name of the Ollama model to use for image classification. Defaults to `gemma3:4b`.
+
 ## Usage
 
 1. Place the images you want to classify in the `images` directory.

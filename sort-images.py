@@ -4,15 +4,19 @@ from pathlib import Path
 from ollama import chat
 from ollama._types import Image
 from ollama import Client
+from dotenv import load_dotenv
 
-client = Client(
-    host='http://host.docker.internal:11434'
-)
+load_dotenv()
+
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
+client = Client(host=OLLAMA_HOST)
 
 # Paths
-INPUT_FOLDER = 'images'
-BAD_FOLDER = os.path.join(INPUT_FOLDER, 'bad_quality')
-OK_FOLDER = os.path.join(INPUT_FOLDER, 'ok')
+INPUT_FOLDER = os.getenv('INPUT_FOLDER', 'images')
+BAD_QUALITY_FOLDER_NAME = os.getenv('BAD_QUALITY_FOLDER_NAME', 'bad_quality')
+BAD_FOLDER = os.path.join(INPUT_FOLDER, BAD_QUALITY_FOLDER_NAME)
+OK_QUALITY_FOLDER_NAME = os.getenv('OK_QUALITY_FOLDER_NAME', 'ok')
+OK_FOLDER = os.path.join(INPUT_FOLDER, OK_QUALITY_FOLDER_NAME)
 
 print("🔄 Sorting images...")
 
@@ -21,7 +25,7 @@ os.makedirs(BAD_FOLDER, exist_ok=True)
 os.makedirs(OK_FOLDER, exist_ok=True)
 
 # Model name – use a vision-capable one
-MODEL = 'gemma3:4b'  # Working great
+MODEL = os.getenv('MODEL_NAME', 'gemma3:4b')  # Working great
 
 # MODEL = 'llava:latest' # Not working, dosent follow instructions
 
