@@ -27,7 +27,11 @@ os.makedirs(OK_FOLDER, exist_ok=True)
 # Model name – use a vision-capable one
 MODEL = os.getenv('MODEL_NAME', 'gemma3:4b')  # Working great
 
-# MODEL = 'llava:latest' # Not working, dosent follow instructions
+# Supported image extensions
+raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
+                           ".jpg,.jpeg,.png,.bmp,.webp")
+SUPPORTED_EXTENSIONS = set(ext.strip().lower()
+                           for ext in raw_extensions.split(",") if ext.strip())
 
 
 def classify_image(image_path: str) -> str:
@@ -50,6 +54,20 @@ def classify_image(image_path: str) -> str:
     return response['message']['content'].strip().lower()
 
 
+def get_unique_path(path: str) -> str:
+    base, ext = os.path.splitext(path)
+    i = 1
+    new_path = path
+    while os.path.exists(new_path):
+        new_path = f"{base}_{i}{ext}"
+        i += 1
+    return new_path
+
+
+def is_supported_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in SUPPORTED_EXTENSIONS
+
+
 def sort_images():
     for filename in os.listdir(INPUT_FOLDER):
         file_path = os.path.join(INPUT_FOLDER, filename)
@@ -59,7 +77,7 @@ def sort_images():
         # Skip non-image files or directories
         if not os.path.isfile(file_path):
             continue
-        if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+        if not is_supported_image(filename):
             continue
 
         print(f"🔍 Processing {filename}...")
@@ -70,25 +88,15 @@ def sort_images():
             print(f"⚠️ Error processing {filename}: {e}")
             continue
 
-        # Check categories and move files accordingly
-        if 'screenshot' in categories or 'blurry' in categories or 'low resolution' in categories or 'low quality' in categories:
+        BAD_CATEGORIES = {'screenshot', 'blurry',
+                          'low resolution', 'low quality'}
+        if any(category in categories for category in BAD_CATEGORIES):
             target_folder = BAD_FOLDER
         else:
             target_folder = OK_FOLDER
 
-        destination_path = os.path.join(target_folder, filename)
-
-        if os.path.exists(destination_path):
-            base, ext = os.path.splitext(filename)
-            i = 1
-            new_filename = f"{base}_{i}{ext}"
-            new_destination_path = os.path.join(target_folder, new_filename)
-            while os.path.exists(new_destination_path):
-                i += 1
-                new_filename = f"{base}_{i}{ext}"
-                new_destination_path = os.path.join(
-                    target_folder, new_filename)
-            destination_path = new_destination_path
+        destination_path = get_unique_path(
+            os.path.join(target_folder, filename))
 
         shutil.move(file_path, destination_path)
 
