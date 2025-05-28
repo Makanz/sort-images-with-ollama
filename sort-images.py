@@ -8,36 +8,38 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 🧠 Konfiguration
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
-client = Client(host=OLLAMA_HOST)
-
-# Paths
+MODEL = os.getenv('MODEL_NAME', 'gemma3:4b')
 INPUT_FOLDER = os.getenv('INPUT_FOLDER', 'images')
 BAD_QUALITY_FOLDER_NAME = os.getenv('BAD_QUALITY_FOLDER_NAME', 'bad_quality')
-BAD_FOLDER = os.path.join(INPUT_FOLDER, BAD_QUALITY_FOLDER_NAME)
 OK_QUALITY_FOLDER_NAME = os.getenv('OK_QUALITY_FOLDER_NAME', 'ok')
+
+BAD_FOLDER = os.path.join(INPUT_FOLDER, BAD_QUALITY_FOLDER_NAME)
 OK_FOLDER = os.path.join(INPUT_FOLDER, OK_QUALITY_FOLDER_NAME)
+
+# 📂 Stöd för bildformat
+raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
+                           ".jpg,.jpeg,.png,.bmp,.webp")
+SUPPORTED_EXTENSIONS = set(
+    ext.strip().lower() for ext in raw_extensions.split(",") if ext.strip()
+)
+
+# ❌ Kategorier för dålig bildkvalitet
+raw_bad_categories = os.getenv(
+    "BAD_CATEGORIES", "screenshot,blurry,low resolution,low quality")
+BAD_CATEGORIES = set(
+    cat.strip().lower() for cat in raw_bad_categories.split(",") if cat.strip()
+)
+
+# 🧠 Klient
+client = Client(host=OLLAMA_HOST)
 
 print("🔄 Sorting images...")
 
 # Create folders
 os.makedirs(BAD_FOLDER, exist_ok=True)
 os.makedirs(OK_FOLDER, exist_ok=True)
-
-# Model name – use a vision-capable one
-MODEL = os.getenv('MODEL_NAME', 'gemma3:4b')  # Working great
-
-# Supported image extensions
-raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
-                           ".jpg,.jpeg,.png,.bmp,.webp")
-SUPPORTED_EXTENSIONS = set(ext.strip().lower()
-                           for ext in raw_extensions.split(",") if ext.strip())
-
-# Bad categories for classification
-raw_bad_categories = os.getenv(
-    "BAD_CATEGORIES", "blurry")
-BAD_CATEGORIES = set(cat.strip().lower()
-                     for cat in raw_bad_categories.split(",") if cat.strip())
 
 
 def classify_image(image_path: str) -> str:
