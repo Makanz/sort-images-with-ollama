@@ -40,7 +40,7 @@ def classify_image(image_path: str) -> str:
 
     prompt = (
         "You are an image quality classifier. Look extra for screenshots and blurry images.\n"
-        "Analyze the image and return ONLY a comma sperated list of categories"
+        "Analyze the image and return ONLY a comma separated list of categories"
     )
 
     response = client.chat(
