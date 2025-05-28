@@ -72,9 +72,25 @@ def sort_images():
 
         # Check categories and move files accordingly
         if 'screenshot' in categories or 'blurry' in categories or 'low resolution' in categories or 'low quality' in categories:
-            shutil.move(file_path, os.path.join(BAD_FOLDER, filename))
+            target_folder = BAD_FOLDER
         else:
-            shutil.move(file_path, os.path.join(OK_FOLDER, filename))
+            target_folder = OK_FOLDER
+
+        destination_path = os.path.join(target_folder, filename)
+
+        if os.path.exists(destination_path):
+            base, ext = os.path.splitext(filename)
+            i = 1
+            new_filename = f"{base}_{i}{ext}"
+            new_destination_path = os.path.join(target_folder, new_filename)
+            while os.path.exists(new_destination_path):
+                i += 1
+                new_filename = f"{base}_{i}{ext}"
+                new_destination_path = os.path.join(
+                    target_folder, new_filename)
+            destination_path = new_destination_path
+
+        shutil.move(file_path, destination_path)
 
 
 if __name__ == "__main__":
