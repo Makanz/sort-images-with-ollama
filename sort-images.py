@@ -33,6 +33,12 @@ raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
 SUPPORTED_EXTENSIONS = set(ext.strip().lower()
                            for ext in raw_extensions.split(",") if ext.strip())
 
+# Bad categories for classification
+raw_bad_categories = os.getenv(
+    "BAD_CATEGORIES", "blurry")
+BAD_CATEGORIES = set(cat.strip().lower()
+                     for cat in raw_bad_categories.split(",") if cat.strip())
+
 
 def classify_image(image_path: str) -> str:
     print(f"📸 Classifying image: {image_path}")
@@ -88,8 +94,6 @@ def sort_images():
             print(f"⚠️ Error processing {filename}: {e}")
             continue
 
-        BAD_CATEGORIES = {'screenshot', 'blurry',
-                          'low resolution', 'low quality'}
         if any(category in categories for category in BAD_CATEGORIES):
             target_folder = BAD_FOLDER
         else:
