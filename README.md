@@ -1,5 +1,3 @@
-# sort-images-with-ollama/README.md
-
 # Sort Images with Ollama
 
 This project is designed to classify and sort images into different categories using a Python script and the Ollama model. The script processes images located in the `images` directory and sorts them into three categories: screenshots, bad quality, and okay.
@@ -30,6 +28,14 @@ sort-images-with-ollama
 
 3. **Install Dependencies**
    - The development container will automatically install the required Python dependencies specified in the `Dockerfile`.
+   - If running locally, install dependencies with:
+     ```bash
+     pip install -r requirements.txt
+     ```
+
+4. **Set Up Ollama LLM**
+   - Download and start the Ollama LLM server as described in the [Ollama documentation](https://ollama.com/).
+   - Ensure the server is running and accessible at the URL specified in your `.env` file.
 
 ## Configuration
 
@@ -57,6 +63,15 @@ This project uses a `.env` file for configuration. To get started:
    - `images/screenshots` for screenshots
    - `images/bad_quality` for images classified as bad quality
    - `images/ok` for images classified as okay
+
+## Customization
+
+- You can modify the prompts sent to the LLM and adjust model parameters in the code (see `llm_utils.py` or similar files).
+
+## Troubleshooting
+
+- If the script cannot connect to the LLM, ensure the Ollama server is running and the `OLLAMA_HOST` value in your `.env` file is correct.
+- Check the terminal output for error messages.
 
 ## Contributing
 
