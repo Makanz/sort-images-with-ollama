@@ -145,6 +145,38 @@ def classify(host: str, model: str, b64: str, timeout: int, keep_alive: str) -> 
     return r.json()
 
 
+def chat_categories(host: str, model: str, b64: str, timeout: int) -> set[str]:
+    """Andra åsikt: en vanlig chat-modell, samma uppdrag som sort-images.py ger."""
+    prompt = (
+        "You are an image quality classifier. Look extra for screenshots and blurry images.\n"
+        "Analyze the image and return ONLY a comma separated list of categories"
+    )
+    body = {"model": model, "stream": False,
+            "messages": [{"role": "user", "content": prompt, "images": [b64]}]}
+    r = requests.post(host.rstrip("/") + "/api/chat", json=body, timeout=timeout)
+    r.raise_for_status()
+    text = r.json().get("message", {}).get("content", "").strip().lower()
+    return {c.strip().replace(" ", "_") for c in text.split(",") if c.strip()}
+
+
+# Samma tre lägen som sort-images.py, så benchen mäter det du faktiskt kör.
+CLEF_BAD = {"screenshot", "photo_of_screen", "low_resolution", "document", "blurry"}
+
+
+def resolve_verdict(clef_bad: bool, alt: set[str] | None, mode: str) -> bool:
+    """Slutlig dom (True = skräp). alt=None betyder att ingen andra åsikt gavs."""
+    if alt is None:
+        return clef_bad
+    alt_bad = bool(alt & CLEF_BAD)
+    if mode == "veto":
+        return clef_bad or alt_bad
+    if mode == "agree":
+        return clef_bad and alt_bad
+    if mode == "override":
+        return alt_bad
+    raise ValueError(f"Okänt --second-mode: {mode}")
+
+
 # --------------------------------------------------------------------------
 # Facit
 # --------------------------------------------------------------------------
@@ -211,18 +243,44 @@ def analyze_one(args, root: Path, rel: str, facit: dict[str, dict]) -> dict:
         answers = resp.get("answers", {})
         itype = answers.get("image_type", {})
         choice = itype.get("choice")
+        conf = itype.get("confidence")
         blur = answers.get("blurry", {}).get("noul") or 0.0
         keep = answers.get("keep", {}).get("noul") or 0.0
+        clef_screenshot = choice in ("screenshot", "photo_of_screen")
+        clef_blur = blur >= args.blur_threshold
+        clef_bad = choice in CLEF_BAD or clef_blur
+
+        # Andra åsikt: bara när Clef tvekar. Mäter om eskaleringen hjälper.
+        alt: set[str] | None = None
+        escalated = False
+        if args.second_model:
+            need = conf is None or bool(clef_screenshot != clef_blur) or (conf or 0) < args.second_threshold
+            if need:
+                escalated = True
+                try:
+                    alt = chat_categories(args.host, args.second_model, b64, args.timeout)
+                except Exception as exc:  # noqa: BLE001
+                    row.setdefault("warnings", []).append(f"second opinion: {exc}")
+
         row["clef"] = {
             "image_type": choice,
             "image_type_prob": round(itype.get("probabilities", {}).get(choice, 0.0), 3),
-            "screenshot": choice == "screenshot",
+            "confidence": conf,
+            "screenshot": clef_screenshot,
             "screenshot_or_screen_photo": choice in ("screenshot", "photo_of_screen"),
-            "blurry": blur >= args.blur_threshold,
+            "blurry": clef_blur,
             "blurry_prob": round(blur, 3),
             "keep": keep >= 0.5,
             "keep_prob": round(keep, 3),
+            "verdict_bad": clef_bad,
         }
+        if args.second_model:
+            row["second"] = {
+                "model": args.second_model,
+                "escalated": escalated,
+                "categories": sorted(alt) if alt is not None else None,
+                "verdict_bad": resolve_verdict(clef_bad, alt, args.second_mode) if escalated else None,
+            }
         row["latency_ms"] = round((time.perf_counter() - t0) * 1000)
         if args.raw:
             row["raw"] = resp
@@ -263,7 +321,7 @@ def confusion(rows: list[dict], clef_key: str, facit_key: str) -> dict:
     }
 
 
-def summarize(rows: list[dict], model: str, facit_mode: str) -> str:
+def summarize(rows: list[dict], model: str, facit_mode: str, second_flag: bool = False) -> str:
     done = [r for r in rows if "error" not in r]
     errs = [r for r in rows if "error" in r]
     lat = sorted(r["latency_ms"] for r in done)
@@ -303,6 +361,42 @@ def summarize(rows: list[dict], model: str, facit_mode: str) -> str:
     lines.append("## Clef's egna kategorier")
     for k, v in sorted(cats.items(), key=lambda kv: -kv[1]):
         lines.append(f"- {k}: {v}")
+
+    # ── Second opinion ────────────────────────────────────────────────────
+    sec = [r for r in done if r.get("second", {}).get("escalated")]
+    if sec:
+        esc = len(sec)
+        lines.append("")
+        lines.append(f"## Second opinion (eskalerade {esc} av {len(done)} bilder)")
+        for mode in ("veto", "agree", "override"):
+            # Räkna om domen för varje läge i efterhand — samma körning, tre svar.
+            tp = fp = fn = tn = 0
+            for r in sec:
+                verdict = resolve_verdict(
+                    r["clef"]["verdict_bad"], set(r["second"]["categories"] or []), mode)
+                want = bool(r["facit"]["screenshot"] or r["facit"]["blurry"])
+                tp += verdict and want
+                fp += verdict and not want
+                fn += (not verdict) and want
+                tn += (not verdict) and not want
+            acc = (tp + tn) / esc if esc else float("nan")
+            prec = tp / (tp + fp) if tp + fp else float("nan")
+            rec = tp / (tp + fn) if tp + fn else float("nan")
+            lines.append(f"- **{mode}**: TP {tp} / FP {fp} / FN {fn} / TN {tn}"
+                         f"  -> precision {round(prec, 3)}, recall {round(rec, 3)},"
+                         f" samstämmighet {round(acc, 3)}")
+
+        # Vad de var oense om, så man kan bedöma om eskaleringen ens är värd det.
+        disagree = [r for r in sec
+                    if r["clef"]["verdict_bad"] != bool(set(r["second"]["categories"] or []) & CLEF_BAD)]
+        lines.append(f"- Oense i {len(disagree)} av {esc} eskalerade fall")
+        for r in disagree[:10]:
+            lines.append(f"  - {r['fil']}: Clef={r['clef']['image_type']}"
+                         f"(conf {r['clef']['confidence']}) andra={r['second']['categories']}")
+    elif second_flag:
+        lines.append("")
+        lines.append("## Second opinion")
+        lines.append("- Ingen bild eskalerade (alla hade hög confidence).")
 
     if errs:
         lines.append("")
@@ -349,6 +443,14 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="Hoppa över bilder som redan finns i JSONL")
     ap.add_argument("--raw", action="store_true", help="Spara hela svaret per bild i JSONL")
     ap.add_argument("--smoke", action="store_true", help="Kör en bild och skriv ut rå JSON")
+    ap.add_argument("--second-model", default=os.getenv("SECOND_OPINION_MODEL", "").strip(),
+                    help="Chat-modell för andra åsikt (t.ex. gemma3:4b). Tom = av.")
+    ap.add_argument("--second-mode", choices=["veto", "agree", "override"], default="veto",
+                    help="Hur de två domarna vägs: veto (rädda), agree (båda ense), "
+                         "override (andra vinner). Alla tre räknas alltid ut i rapporten.")
+    ap.add_argument("--second-threshold", type=float,
+                    default=float(os.getenv("SECOND_OPINION_THRESHOLD", "0.8")),
+                    help="Eskalera när Clef:s confidence understiger detta")
     args = ap.parse_args()
 
     root = args.folder.resolve()
@@ -411,7 +513,7 @@ def main() -> None:
                 tag = f"{c['image_type']:<16} oskarp={c['blurry_prob']:<5} behåll={c['keep_prob']}"
             print(f"[{i}/{len(todo)}] {row['fil']}  {tag}  {row['latency_ms']} ms")
 
-    summary = summarize(rows, args.model, mode_used)
+    summary = summarize(rows, args.model, mode_used, bool(args.second_model))
     summary_path.write_text(summary, encoding="utf-8")
     print("\n" + summary)
     print(f"\nRapport: {summary_path}\nRådata:  {jsonl}")

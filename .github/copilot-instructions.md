@@ -36,6 +36,11 @@ new enough Ollama or a big enough GPU.
   live in a separate project.
 - `clef_bench.py`'s answer key is a heuristic, not ground truth. Never present
   its numbers as accuracy; they measure agreement with the key.
+- The second-opinion lane exists to be *measured*, not assumed. All three modes
+  are computed from one run on purpose — do not hardcode a winner.
+- The second model is asked in its own words (comma separated categories), not
+  Clef's schema. Normalise its answer before comparing, or "low resolution"
+  and "low_resolution" look like a disagreement.
 
 ## Testing
 

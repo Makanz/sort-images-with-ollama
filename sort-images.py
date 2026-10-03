@@ -8,6 +8,10 @@ Two lanes, chosen with CLASSIFIER:
                     Ollama's /v1/systemone endpoint (Ollama >= 0.35.1).
                     Returns calibrated probabilities instead of free text.
 
+The clef lane also reports how sure it is. When it is unsure, set
+SECOND_OPINION to have a different model look at the same image and let the
+two verdicts decide together.
+
     pip install -r requirements.txt
     cp .env.example .env
     python sort-images.py
@@ -51,6 +55,14 @@ INPUT_FOLDER = os.getenv('INPUT_FOLDER', 'images')
 BAD_QUALITY_FOLDER_NAME = os.getenv('BAD_QUALITY_FOLDER_NAME', 'bad_quality')
 OK_QUALITY_FOLDER_NAME = os.getenv('OK_QUALITY_FOLDER_NAME', 'ok')
 MAX_PX = int(os.getenv('CLEF_MAX_PX', '1280'))
+BLUR_THRESHOLD = float(os.getenv('BLUR_THRESHOLD', '0.5'))
+
+# ── Second opinion ────────────────────────────────────────────────────────
+# När Clef är osäker får en annan modell titta på samma bild. Tom = av.
+SECOND_OPINION = os.getenv('SECOND_OPINION', '').strip()
+SECOND_MODEL = os.getenv('SECOND_OPINION_MODEL', 'gemma3:4b')
+SECOND_THRESHOLD = float(os.getenv('SECOND_OPINION_THRESHOLD', '0.8'))
+SECOND_MODE = os.getenv('SECOND_OPINION_MODE', 'veto').strip().lower()
 
 BAD_FOLDER = os.path.join(INPUT_FOLDER, BAD_QUALITY_FOLDER_NAME)
 OK_FOLDER = os.path.join(INPUT_FOLDER, OK_QUALITY_FOLDER_NAME)
@@ -108,6 +120,12 @@ CLEF_MOVE_MAP = {
     "blurry": BAD_QUALITY_FOLDER_NAME,
 }
 
+# Kategorier som betyder "den här bilden ska bort". OBS: BAD_CATEGORIES är
+# fritext från chat-lanen och stavar "low resolution" med blanksteg, medan
+# clef-lanen använder "low_resolution" — jämför därför mot normaliserade former.
+CLEF_BAD = set(CLEF_MOVE_MAP)
+BAD_NORMALIZED = {c.replace(" ", "_") for c in BAD_CATEGORIES}
+
 if CLASSIFIER not in ("chat", "clef"):
     sys.exit(f"CLASSIFIER måste vara 'chat' eller 'clef', inte {CLASSIFIER!r}")
 
@@ -158,8 +176,8 @@ def _encode_image(image_path: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def classify_image_clef(image_path: str) -> set:
-    """Clef-lane: typat schema via /v1/systemone. Returnerar kategorier."""
+def classify_image_clef(image_path: str) -> tuple[set, float | None]:
+    """Clef-lane: typat schema via /v1/systemone. Returnerar (kategorier, confidence)."""
     print(f"📸 Classifying image (clef): {image_path}")
     body = {
         "model": CLEF_MODEL,
@@ -181,9 +199,30 @@ def classify_image_clef(image_path: str) -> set:
     if itype and itype != "photo":
         categories.add(itype)
     blur = answers.get("blurry", {}).get("noul") or 0.0
-    if blur >= float(os.getenv("BLUR_THRESHOLD", "0.5")):
+    if blur >= BLUR_THRESHOLD:
         categories.add("blurry")
-    return categories
+
+    # Clef lämnar kalibrerade sannolikheter. confidence är hur koncentrerad
+    # fördelningen är — inte sannolikheten att svaret är rätt. Låg confidence
+    # betyder att modellen tvekar mellan flera alternativ.
+    conf = answers.get("image_type", {}).get("confidence")
+    return categories, conf
+
+
+def second_opinion(image_path: str) -> set:
+    """Låt en annan modell svara på samma bild. Returnerar dess kategorier."""
+    print(f"🧐 Second opinion ({SECOND_MODEL}): {image_path}")
+    img = Image(value=Path(image_path))
+    prompt = (
+        "You are an image quality classifier. Look extra for screenshots and blurry images.\n"
+        "Analyze the image and return ONLY a comma separated list of categories"
+    )
+    response = client.chat(
+        model=SECOND_MODEL,
+        messages=[{'role': 'user', 'content': prompt, 'images': [img]}],
+    )
+    text = response['message']['content'].strip().lower()
+    return {c.strip() for c in text.split(",") if c.strip()}
 
 
 def get_unique_path(path: str) -> str:
@@ -213,6 +252,53 @@ def pick_folder(categories: set) -> str:
     return OK_FOLDER
 
 
+def resolve(categories: set, confidence: float | None,
+            image_path: str) -> tuple[set, str]:
+    """Clef först; vid tvekan får en andra modell väga in.
+
+    Returnerar (kategorier, spår) där spåret är avsett för loggen så att det
+    går att se i efterhand hur många bilder som faktiskt eskalerade.
+    """
+    if CLASSIFIER != "clef" or not SECOND_OPINION:
+        return categories, "clef"
+    if confidence is not None and confidence >= SECOND_THRESHOLD:
+        return categories, "clef"
+
+    try:
+        alt = second_opinion(image_path)
+    except Exception as e:
+        print(f"⚠️ Second opinion misslyckades ({e}) — behåller Clef")
+        return categories, "clef"
+
+    # Andra modellen svarar i sin egen vokabulär. Normalisera till gemensamma
+    # kategorinamn så att jämförelsen mot CLEF_BAD/MOVEMAP blir rättvisande.
+    alt = {c.replace(" ", "_") for c in alt}
+
+    if SECOND_MODE == "override":
+        print(f"🔀 Second opinion ersätter: Clef={categories or '{}'} → {alt or '{}'}")
+        return alt, "second-override"
+
+    if SECOND_MODE == "agree":
+        # Konservativt: fäll bara om BÅDA flaggar problem. Är de oense vinner
+        # tvivlet och bilden behålls — det är hela poängen med läget.
+        clef_bad = bool(categories & CLEF_BAD)
+        alt_bad = bool(alt & CLEF_BAD)
+        if clef_bad and alt_bad:
+            print(f"🔀 Båda ense om problem: Clef={categories} andra={alt}")
+            return categories, "second-agree"
+        if clef_bad or alt_bad:
+            print(f"🔀 Oense (Clef={categories or 'ok'} andra={alt or 'ok'}) "
+                  f"— behåller bilden")
+        return set(), "second-agree-keep"
+
+    # veto (standard): andra modellen får bara rädda bilder, aldrig fälla dem.
+    # Clef är den säkrare av de två, så dess dom står kvar om den flaggat.
+    if not categories and (alt & CLEF_BAD):
+        print(f"🔀 Second opinion räddade bilden: {alt}")
+        return alt, "second-veto"
+    return categories, "clef"
+
+
 def sort_images():
     for filename in os.listdir(INPUT_FOLDER):
         file_path = os.path.join(INPUT_FOLDER, filename)
@@ -228,10 +314,13 @@ def sort_images():
         print(f"🔍 Processing {filename}...")
         try:
             if CLASSIFIER == "clef":
-                categories = classify_image_clef(file_path)
+                categories, confidence = classify_image_clef(file_path)
+                categories, lane = resolve(categories, confidence, file_path)
+                print(f"✅ Classified as: {categories or '{}'}  "
+                      f"(confidence={confidence}, spår={lane})")
             else:
                 categories = classify_image(file_path)
-            print(f"✅ Classified as: {categories}")
+                print(f"✅ Classified as: {categories}")
         except Exception as e:
             print(f"⚠️ Error processing {filename}: {e}")
             continue

@@ -63,6 +63,37 @@ sort-images-with-ollama
 | `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
 | `CLEF_MAX_PX` | `1280` | downscale before sending to Clef |
 | `BLUR_THRESHOLD` | `0.5` | blur probability above which an image is junk |
+| `SECOND_OPINION` | *(empty)* | set to `clef` to enable the second-opinion lane |
+| `SECOND_OPINION_MODEL` | `gemma3:4b` | any vision chat model (`gemma3:4b`, `moondream`, `llava:7b`) |
+| `SECOND_OPINION_THRESHOLD` | `0.8` | escalate when Clef's confidence falls below this |
+| `SECOND_OPINION_MODE` | `veto` | `veto`, `agree` or `override` — see below |
+
+## Second opinion
+
+Clef already tells you how sure it is: every answer carries a `confidence` from
+0 to 1. It measures how concentrated the probability mass is, not the chance the
+answer is right — but low values reliably mean the model was torn between
+options.
+
+Set `SECOND_OPINION=clef` and, whenever that confidence drops below
+`SECOND_OPINION_THRESHOLD`, a *different* model is asked about the same image.
+Three ways to combine the two verdicts:
+
+- **`veto`** (default, safest) — the second model can only *rescue* images. If
+  Clef saw nothing wrong but the other model did, the image is quarantined
+  anyway. Clef's own verdict always stands. This maximises recall: fewer bad
+  images slip through.
+- **`agree`** — quarantine only when *both* models flag a problem. Disagreement
+  keeps the image. Most conservative: fewest false alarms, most junk retained.
+- **`override`** — the second model's verdict replaces Clef's entirely.
+
+Cost: the second model only runs on the images that actually escalated, so a
+confident run pays nothing. Watch the `confidence=` and `spår=` values in the
+output to see how often that happens; if almost everything escalates, raise
+`SECOND_OPINION_THRESHOLD` or the second opinion is just doubling your runtime.
+
+`clef_bench.py` computes **all three** modes from a single run, so you can
+compare them without re-running anything.
 
 ## Usage
 
@@ -99,6 +130,15 @@ Output is `clef_bench_results.jsonl` (one row per image, resumable) and
 `clef_bench_summary.md`. A `--smoke` flag sends one image and prints the raw
 answer, which is the right first step after pulling the model.
 
+With `--second-model gemma3:4b` the bench also escalates low-confidence images
+and reports all three `--second-mode` variants side by side, plus how often the
+two models disagreed. Same answer key, so the comparison is apples to apples:
+
+```bash
+python clef_bench.py "C:\photos\sample" --facit-mode folders \
+  --second-model gemma3:4b --second-threshold 0.8
+```
+
 Two caveats worth stating plainly:
 
 - The answer key is a heuristic (or your own filing), **not ground truth**. The
@@ -122,12 +162,17 @@ Two caveats worth stating plainly:
   `clef` while the model name isn't a decision model. Update Ollama.
 - **Out of memory on the clef lane** — `clef:27b` needs ~18 GB. Use
   `clef-flash`, or lower `CLEF_MAX_PX`.
-- **`Every image lands in ok`** — the model is answering `photo` for
+- **Every image lands in `ok`** — the model is answering `photo` for
   everything; run `clef_bench.py` to see whether that's actually correct on
   your images before assuming the sorter is broken.
 - **HEIC/HEIF files are skipped or fail with `UnidentifiedImageError`** —
   `pillow-heif` isn't installed. It is in `requirements.txt`; confirm with
   `pip install pillow-heif`. Pillow cannot read HEIC on its own.
+
+- **Second opinion always runs on every image** — Clef's `confidence` is below
+  `SECOND_OPINION_THRESHOLD` for most of your images. Either the threshold is
+  too high, or the task genuinely is hard and you are now paying for two models.
+  Compare the modes in `clef_bench.py` output before committing to it.
 
 ## Contributing
 
