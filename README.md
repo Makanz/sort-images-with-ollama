@@ -181,3 +181,30 @@ Issues and pull requests are welcome.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Known blocker: clef-flash on Windows
+
+As of Ollama 0.35.1, `clef-flash` fails on **every** `/v1/systemone` request on
+Windows with HTTP 500 `Clef: non-finite logit`. It is not a memory problem — the
+model loads fully into VRAM — and it is not specific to your GPU: the same
+failure occurs on CUDA, ROCm, Vulkan and CPU. The identical model blob works in
+**WSL2 on the same GPU**, which points at the Windows build of Clef's decision
+head rather than the model file. `clef:27b` (Q4_K_M) is reported working;
+`clef-flash` (Q8_0) is the affected variant. `tev1` and `nimble` work fine.
+
+Upstream: [ollama/ollama#18769](https://github.com/ollama/ollama/issues/18769).
+
+Worth knowing before you build on this: **`clef` and `tev1` are text-only.**
+Their capability is `decision`, not `vision` — they cannot score images. Only
+`clef-flash` had a vision encoder, and it is the broken one. So on Windows today
+there is no working image-capable decision model through `/v1/systemone`.
+Options are WSL2, or a chat lane instead:
+
+- `CLASSIFIER=chat` with a vision model — the original lane, unaffected.
+- `CLASSIFIER=clef` against a WSL2 Ollama (`--host http://<wsl-ip>:11434`).
+
+Verify before debugging anything else:
+
+```bash
+python clef_bench.py <folder> --smoke    # 500 here means the upstream bug
+```
