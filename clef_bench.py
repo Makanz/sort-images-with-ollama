@@ -60,6 +60,15 @@ DEFAULT_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_MODEL = os.getenv("CLEF_MODEL_NAME", "clef-flash")
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
+
+# Phone photos are often HEIC. Pillow can't open them without this, and the
+# failure would look like a corrupt file rather than a missing dependency.
+try:
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
 # Karantänmappen från fotorens hoppas över som standard (annars dubbelräknas
 # redan flaggade bilder). Övriga mappar läses — annars fungerar inte
 # --facit-mode folden, där hela poängen är att läsa screenshots/ blurry/ ok/.

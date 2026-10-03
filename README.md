@@ -60,7 +60,7 @@ sort-images-with-ollama
 | `BAD_QUALITY_FOLDER_NAME` | `bad_quality` | destination for junk |
 | `OK_QUALITY_FOLDER_NAME` | `ok` | destination for keepers |
 | `BAD_CATEGORIES` | `screenshot,blurry,low resolution,low quality` | chat-lane keyword match |
-| `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp` | file filter |
+| `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
 | `CLEF_MAX_PX` | `1280` | downscale before sending to Clef |
 | `BLUR_THRESHOLD` | `0.5` | blur probability above which an image is junk |
 
@@ -122,9 +122,12 @@ Two caveats worth stating plainly:
   `clef` while the model name isn't a decision model. Update Ollama.
 - **Out of memory on the clef lane** — `clef:27b` needs ~18 GB. Use
   `clef-flash`, or lower `CLEF_MAX_PX`.
-- **Every image lands in `ok`** — the model is answering `photo` for
+- **`Every image lands in ok`** — the model is answering `photo` for
   everything; run `clef_bench.py` to see whether that's actually correct on
   your images before assuming the sorter is broken.
+- **HEIC/HEIF files are skipped or fail with `UnidentifiedImageError`** —
+  `pillow-heif` isn't installed. It is in `requirements.txt`; confirm with
+  `pip install pillow-heif`. Pillow cannot read HEIC on its own.
 
 ## Contributing
 

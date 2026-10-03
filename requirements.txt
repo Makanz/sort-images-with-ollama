@@ -6,3 +6,6 @@ python-dotenv>=1.0.0
 # samt för clef_bench.py
 requests>=2.32.0
 pillow>=10.0.0
+
+# HEIC/HEIF (iPhone/Android-standard). Utan denna hoppas .heic över.
+pillow-heif>=0.18.0

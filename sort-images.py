@@ -30,6 +30,13 @@ try:
         RESAMPLE = PILImage.Resampling.LANCZOS
     except AttributeError:  # Pillow < 9.1
         RESAMPLE = PILImage.LANCZOS
+    # Phone photos are often HEIC. Pillow can't open them without this.
+    try:
+        import pillow_heif
+
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
 except ImportError:
     PILImage = None
 
@@ -50,7 +57,7 @@ OK_FOLDER = os.path.join(INPUT_FOLDER, OK_QUALITY_FOLDER_NAME)
 
 # 📂 Stöd för bildformat
 raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
-                           ".jpg,.jpeg,.png,.bmp,.webp")
+                           ".jpg,.jpeg,.png,.bmp,.webp,.heic,.heif")
 SUPPORTED_EXTENSIONS = set(
     ext.strip().lower() for ext in raw_extensions.split(",") if ext.strip()
 )
