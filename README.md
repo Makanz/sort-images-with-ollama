@@ -1,82 +1,210 @@
 # Sort Images with Ollama
 
-This project is designed to classify and sort images into different categories using a Python script and the Ollama model. The script processes images located in the `images` directory and sorts them into three categories: screenshots, bad quality, and okay.
+Classify and sort images into folders — screenshots, bad quality, and okay —
+using a model that runs entirely on your own machine.
 
-## Project Structure
+Two lanes, chosen with `CLASSIFIER` in `.env`:
+
+- **`chat`** (default) — an ordinary chat model replies with a comma separated
+  list of categories. Works with any vision model (`gemma3:4b`, `llava`, …).
+- **`clef`** — a [Cloudflare Clef](https://blog.cloudflare.com/clef-decision-models/)
+  decision model answers a *typed schema* in a single pass via Ollama's
+  `/v1/systemone` endpoint and returns calibrated probabilities instead of free
+  text. Needs Ollama ≥ 0.35.1. `clef-flash` (9B, ~11 GB) fits a 12 GB GPU;
+  `clef:27b` (~18 GB) needs 24 GB or will spill into system RAM.
+
+`clef_bench.py` measures either lane against a known-good answer key, so you can
+see whether a model actually beats a simple heuristic before trusting it.
+
+## Project structure
 
 ```
 sort-images-with-ollama
-├── .devcontainer
-│   ├── devcontainer.json
-│   └── Dockerfile
-├── images
-├── sort-images.py
+├── .devcontainer/
+├── .env.example
+├── clef_bench.py          # benchmark Clef/Clef-flash against a facit
+├── sort-images.py         # the sorter (both lanes)
 └── README.md
 ```
 
-## Setup Instructions
+## Setup
 
-1. **Clone the Repository**
+1. **Clone and install**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/Makanz/sort-images-with-ollama.git
    cd sort-images-with-ollama
+   pip install -r requirements.txt
    ```
 
-2. **Open in Development Container**
-   - Open the project in Visual Studio Code.
-   - Use the command palette (Ctrl+Shift+P) and select `Remote-Containers: Reopen in Container`.
+2. **Start Ollama and pull a model**
+   ```bash
+   ollama serve                 # needs >= 0.35.1 for the clef lane
+   ollama pull gemma3:4b        # chat lane
+   ollama pull clef-flash       # clef lane
+   ```
 
-3. **Install Dependencies**
-   - The development container will automatically install the required Python dependencies specified in the `Dockerfile`.
-   - If running locally, install dependencies with:
-     ```bash
-     pip install -r requirements.txt
-     ```
+3. **Configure**
+   ```bash
+   cp .env.example .env
+   ```
 
-4. **Set Up Ollama LLM**
-   - Download and start the Ollama LLM server as described in the [Ollama documentation](https://ollama.com/).
-   - Ensure the server is running and accessible at the URL specified in your `.env` file.
+### Configuration
 
-## Configuration
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CLASSIFIER` | `chat` | `chat` or `clef` |
+| `OLLAMA_HOST` | `http://host.docker.internal:11434` | Ollama API URL |
+| `MODEL_NAME` | `gemma3:4b` | model for the chat lane |
+| `CLEF_MODEL_NAME` | `clef-flash` | `clef-flash` or `clef:27b` |
+| `INPUT_FOLDER` | `images` | folder to sort |
+| `BAD_QUALITY_FOLDER_NAME` | `bad_quality` | destination for junk |
+| `OK_QUALITY_FOLDER_NAME` | `ok` | destination for keepers |
+| `BAD_CATEGORIES` | `screenshot,blurry,low resolution,low quality` | chat-lane keyword match |
+| `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
+| `CLEF_MAX_PX` | `1280` | downscale before sending to Clef |
+| `BLUR_THRESHOLD` | `0.5` | blur probability above which an image is junk |
+| `SECOND_OPINION` | *(empty)* | set to `clef` to enable the second-opinion lane |
+| `SECOND_OPINION_MODEL` | `gemma3:4b` | any vision chat model (`gemma3:4b`, `moondream`, `llava:7b`) |
+| `SECOND_OPINION_THRESHOLD` | `0.8` | escalate when Clef's confidence falls below this |
+| `SECOND_OPINION_MODE` | `veto` | `veto`, `agree` or `override` — see below |
 
-This project uses a `.env` file for configuration. To get started:
+## Second opinion
 
-1.  Copy the example configuration file:
-    ```bash
-    cp .env.example .env
-    ```
-2.  Customize the values in the `.env` file as needed. The available variables are:
-    *   `OLLAMA_HOST`: The URL of the Ollama API. Defaults to `http://host.docker.internal:11434`.
-    *   `INPUT_FOLDER`: The directory where images to be sorted are located. Defaults to `images`.
-    *   `BAD_QUALITY_FOLDER_NAME`: The name of the folder to store bad quality images. Defaults to `bad_quality`.
-    *   `OK_QUALITY_FOLDER_NAME`: The name of the folder to store good quality images. Defaults to `ok`.
-    *   `MODEL_NAME`: The name of the Ollama model to use for image classification. Defaults to `gemma3:4b`.
+Clef already tells you how sure it is: every answer carries a `confidence` from
+0 to 1. It measures how concentrated the probability mass is, not the chance the
+answer is right — but low values reliably mean the model was torn between
+options.
+
+Set `SECOND_OPINION=clef` and, whenever that confidence drops below
+`SECOND_OPINION_THRESHOLD`, a *different* model is asked about the same image.
+Three ways to combine the two verdicts:
+
+- **`veto`** (default, safest) — the second model can only *rescue* images. If
+  Clef saw nothing wrong but the other model did, the image is quarantined
+  anyway. Clef's own verdict always stands. This maximises recall: fewer bad
+  images slip through.
+- **`agree`** — quarantine only when *both* models flag a problem. Disagreement
+  keeps the image. Most conservative: fewest false alarms, most junk retained.
+- **`override`** — the second model's verdict replaces Clef's entirely.
+
+Cost: the second model only runs on the images that actually escalated, so a
+confident run pays nothing. Watch the `confidence=` and `spår=` values in the
+output to see how often that happens; if almost everything escalates, raise
+`SECOND_OPINION_THRESHOLD` or the second opinion is just doubling your runtime.
+
+`clef_bench.py` computes **all three** modes from a single run, so you can
+compare them without re-running anything.
 
 ## Usage
 
-1. Place the images you want to classify in the `images` directory.
-2. Run the script:
+1. Put images in the `images` folder (or set `INPUT_FOLDER`).
+2. Run:
    ```bash
    python sort-images.py
    ```
-3. The images will be sorted into the following folders:
-   - `images/screenshots` for screenshots
-   - `images/bad_quality` for images classified as bad quality
-   - `images/ok` for images classified as okay
+3. Files land in:
+   - `images/screenshots/` — screenshots and photos of screens
+   - `images/bad_quality/` — blurry, low resolution, documents
+   - `images/ok/` — keepers
+
+Files already in a destination folder, and non-images, are left alone. An
+existing file is never overwritten — a numeric suffix is added instead.
+
+## Benchmarking (`clef_bench.py`)
+
+The interesting question isn't "does the model sound right" but "does it beat
+what I already have". `clef_bench.py` answers that numerically: it asks Clef
+about every image and compares the answers against an answer key, reporting
+TP/FP/FN/TN, precision, recall, F1, agreement, and latency — plus lists of every
+disagreement so you can eyeball them.
+
+```bash
+# Answer key from folder names: screenshots/  blurry/  ok/
+python clef_bench.py "C:\photos\sample" --facit-mode folders --limit 200 --resume
+
+# Answer key from a fotorens report (_Rensat_rapport.json, auto-detected)
+python clef_bench.py "C:\photos" --limit 200 --resume
+```
+
+Output is `clef_bench_results.jsonl` (one row per image, resumable) and
+`clef_bench_summary.md`. A `--smoke` flag sends one image and prints the raw
+answer, which is the right first step after pulling the model.
+
+With `--second-model gemma3:4b` the bench also escalates low-confidence images
+and reports all three `--second-mode` variants side by side, plus how often the
+two models disagreed. Same answer key, so the comparison is apples to apples:
+
+```bash
+python clef_bench.py "C:\photos\sample" --facit-mode folders \
+  --second-model gemma3:4b --second-threshold 0.8
+```
+
+Two caveats worth stating plainly:
+
+- The answer key is a heuristic (or your own filing), **not ground truth**. The
+  numbers measure *disagreement*, not who is right. Read the FP/FN lists.
+- If the model only ever agrees with the heuristic, it is not earning its
+  latency — keep the cheap path.
 
 ## Customization
 
-- You can modify the prompts sent to the LLM and adjust model parameters in the code (see `llm_utils.py` or similar files).
+- Edit `CLEF_QUESTIONS` in `sort-images.py` to change the schema Clef answers,
+  and `CLEF_MOVE_MAP` to change where each answer goes.
+- Edit the prompt in `classify_image()` for the chat lane.
+- Adjust `BLUR_THRESHOLD` and `CLEF_MAX_PX` to trade accuracy for speed.
 
 ## Troubleshooting
 
-- If the script cannot connect to the LLM, ensure the Ollama server is running and the `OLLAMA_HOST` value in your `.env` file is correct.
-- Check the terminal output for error messages.
+- **`Cannot connect to the LLM`** — check `OLLAMA_HOST`. From inside a
+  container, `localhost` is the container; use `host.docker.internal` or the
+  host's LAN IP.
+- **`404 /v1/systemone`** — your Ollama is older than 0.35.1, or `CLASSIFIER` is
+  `clef` while the model name isn't a decision model. Update Ollama.
+- **Out of memory on the clef lane** — `clef:27b` needs ~18 GB. Use
+  `clef-flash`, or lower `CLEF_MAX_PX`.
+- **Every image lands in `ok`** — the model is answering `photo` for
+  everything; run `clef_bench.py` to see whether that's actually correct on
+  your images before assuming the sorter is broken.
+- **HEIC/HEIF files are skipped or fail with `UnidentifiedImageError`** —
+  `pillow-heif` isn't installed. It is in `requirements.txt`; confirm with
+  `pip install pillow-heif`. Pillow cannot read HEIC on its own.
+
+- **Second opinion always runs on every image** — Clef's `confidence` is below
+  `SECOND_OPINION_THRESHOLD` for most of your images. Either the threshold is
+  too high, or the task genuinely is hard and you are now paying for two models.
+  Compare the modes in `clef_bench.py` output before committing to it.
 
 ## Contributing
 
-Feel free to submit issues or pull requests if you have suggestions or improvements for the project.
+Issues and pull requests are welcome.
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
+
+## Known blocker: clef-flash on Windows
+
+As of Ollama 0.35.1, `clef-flash` fails on **every** `/v1/systemone` request on
+Windows with HTTP 500 `Clef: non-finite logit`. It is not a memory problem — the
+model loads fully into VRAM — and it is not specific to your GPU: the same
+failure occurs on CUDA, ROCm, Vulkan and CPU. The identical model blob works in
+**WSL2 on the same GPU**, which points at the Windows build of Clef's decision
+head rather than the model file. `clef:27b` (Q4_K_M) is reported working;
+`clef-flash` (Q8_0) is the affected variant. `tev1` and `nimble` work fine.
+
+Upstream: [ollama/ollama#18769](https://github.com/ollama/ollama/issues/18769).
+
+Worth knowing before you build on this: **`clef` and `tev1` are text-only.**
+Their capability is `decision`, not `vision` — they cannot score images. Only
+`clef-flash` had a vision encoder, and it is the broken one. So on Windows today
+there is no working image-capable decision model through `/v1/systemone`.
+Options are WSL2, or a chat lane instead:
+
+- `CLASSIFIER=chat` with a vision model — the original lane, unaffected.
+- `CLASSIFIER=clef` against a WSL2 Ollama (`--host http://<wsl-ip>:11434`).
+
+Verify before debugging anything else:
+
+```bash
+python clef_bench.py <folder> --smoke    # 500 here means the upstream bug
+```
