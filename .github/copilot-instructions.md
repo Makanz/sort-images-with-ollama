@@ -34,7 +34,8 @@ new enough Ollama or a big enough GPU.
 - Sort by *moving*, never deleting. `get_unique_path()` must stay in the write
   path — never overwrite an existing file. Name check plus move is not atomic, so
   only the main thread may call them: classification runs in a pool, moving does
-  not.
+  not. Move as each image finishes (`as_completed`), never in one batch at the end
+  — a run that is interrupted must keep the progress it already made.
 - Do not add a dependency on `opencv`, `imagehash` or any heuristic library to
   the sorter. The point of this repo is the model lane; deterministic heuristics
   live in a separate project.
