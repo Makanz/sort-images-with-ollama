@@ -17,3 +17,9 @@ Thumbs.db
 
 # Ignore images directory (do not track processed images)
 images/
+
+# explain_sort.py: cache och rapport skrivs till cwd som standard (--out byter plats)
+explain_results.jsonl
+explain_report.html
+*_explain_results.jsonl
+*_explain_report.html

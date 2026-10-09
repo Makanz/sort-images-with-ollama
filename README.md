@@ -25,7 +25,9 @@ sort-images-with-ollama
 ├── .devcontainer/
 ├── .env.example
 ├── clef_bench.py          # benchmark Clef/Clef-flash against a facit
+├── explain_sort.py        # report why images landed in screenshots/ and bad_quality/
 ├── sort-images.py         # the sorter (both lanes)
+├── tests/                 # test_routing.py, test_sort_run.py, test_explain.py — no Ollama needed
 └── README.md
 ```
 
@@ -156,6 +158,39 @@ without touching genuinely blurry photos.
 Files already in a destination folder, and non-images, are left alone. An
 existing file is never overwritten — a numeric suffix is added instead.
 
+## Explaining a finished sort (`explain_sort.py`)
+
+The sorter prints its reasons and keeps none of them, so a folder it has already
+sorted is a closed book. `explain_sort.py` reopens it: it asks the model about
+every image now sitting in `screenshots/` and `bad_quality/` and writes an HTML
+page with each thumbnail beside the verdict, the per-option probabilities, the
+confidence and the rule that decided the folder.
+
+```bash
+python explain_sort.py                       # INPUT_FOLDER from .env, both junk folders
+python explain_sort.py --classifier clef --resume
+python explain_sort.py --include-ok          # also ok/, as a control group
+python explain_sort.py --smoke               # one image, raw answer, writes nothing
+```
+
+The point is the **mismatch**: an image in `bad_quality/` that the model now calls
+a fine photo is either genuinely mis-sorted or was a borderline call the first
+time round. Mismatches sort to the top of each folder and are flagged `TILL OK`
+(says keep) or `AVVIKER` (junk in the other junk folder). A mismatch means the
+model disagrees *now*, not that the file is wrong — the chat lane is not
+deterministic, and changing models looks exactly like a real mis-sort.
+
+Output is `explain_results.jsonl` (one row per image, resumable, caching the full
+probability distribution) and `explain_report.html`, both in the current
+directory unless `--out PREFIX` says otherwise. Because the cache holds whole
+distributions and the verdict is derived at render time, changing
+`--blur-threshold` re-derives the report without re-asking the model. If the page
+gets too big at thousands of images, `--no-thumbs` drops the thumbnails; the JSONL
+is the durable artifact.
+
+This script only ever reads. It never moves, renames or deletes anything, so
+unlike the sorter, `--workers` is safe here.
+
 ## Benchmarking (`clef_bench.py`)
 
 The interesting question isn't "does the model sound right" but "does it beat
@@ -196,7 +231,14 @@ Two caveats worth stating plainly:
 
 - Edit `CLEF_QUESTIONS` in `sort-images.py` to change the schema Clef answers,
   and `CLEF_MOVE_MAP` to change where each answer goes.
-- Edit the prompt in `classify_image()` for the chat lane.
+- The chat lane's prompt is `CHAT_PROMPT`, and the labels it offers are derived
+  from `BAD_CATEGORIES` and `SCREENSHOT_CATEGORIES` rather than written out by
+  hand — so to change what the chat model may answer, change those lists. A label
+  the prompt offers but the lists cannot route is a bug, not a configuration:
+  with an open prompt the model replied with descriptions instead of labels and
+  46 % of a measured sample fell through to `ok/`. Add new spellings the model
+  actually uses to `CHAT_ALIASES`, and keep `explain_sort.py`'s copy of the prompt
+  and alias table in step — `tests/test_routing.py` checks they match.
 - Edit `SCREENSHOT_CATEGORIES` to change which chat-lane words route to
   `screenshots/`, and `SCREENSHOT_FOLDER_NAME` to rename the folder.
 - Adjust `BLUR_THRESHOLD` and `CLEF_MAX_PX` to trade accuracy for speed.

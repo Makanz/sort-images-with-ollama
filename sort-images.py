@@ -19,6 +19,7 @@ two verdicts decide together.
 import base64
 import io
 import os
+import re
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -141,6 +142,102 @@ CLEF_MOVE_MAP = {
 # clef-lanen använder "low_resolution" — jämför därför mot normaliserade former.
 CLEF_BAD = set(CLEF_MOVE_MAP)
 BAD_NORMALIZED = {c.replace(" ", "_") for c in BAD_CATEGORIES}
+SCREENSHOT_NORMALIZED = {c.replace(" ", "_") for c in SCREENSHOT_CATEGORIES}
+
+# ── Chat-lanens svar ────────────────────────────────────────────────────────
+# Chat-lanen fick förut "return ONLY a comma separated list of categories" och
+# svarade med en BESKRIVNING av bilden ("wildlife trap, animal trap, outdoor,
+# rodent"). Ingen av de orden finns i BAD_CATEGORIES eller
+# SCREENSHOT_CATEGORIES, så pick_folder() föll rakt igenom till ok/. Mätt på 35
+# riktiga bilder: 16 av 35 (46 %) saknade varje nyckelord. Prompten nedan
+# stänger vokabulären i stället.
+#
+# Etiketterna härleds ur BAD_CATEGORIES/SCREENSHOT_CATEGORIES i stället för att
+# skrivas för hand: en etikett som modellen erbjuds men som ingenstans matchar
+# är exakt den buggen. Ändrar man listorna i .env följer prompten med, och
+# tests/test_routing.py vaktar att de fortfarande hänger ihop.
+CHAT_LABELS = tuple(sorted(BAD_NORMALIZED | SCREENSHOT_NORMALIZED)) + ("ok",)
+
+CHAT_LABEL_HELP = {
+    "screenshot": "a screen capture of a phone or computer user interface",
+    "photo_of_screen": "a photograph of a screen or monitor",
+    "low_resolution": "tiny, pixelated or heavily compressed",
+    "low_quality": "otherwise too poor to keep",
+    "document": "a scan or close-up of a document, receipt or printed text",
+    "blurry": "out of focus, motion blurred or smeared",
+}
+
+CHAT_PROMPT = (
+    "You are an image quality classifier. Decide which of these labels apply.\n"
+    "Labels (use ONLY these exact words): " + ", ".join(CHAT_LABELS) + ".\n"
+    + "".join(f"- {label}: {CHAT_LABEL_HELP.get(label, 'applies to this image')}.\n"
+              for label in CHAT_LABELS if label != "ok")
+    + "- ok: nothing above applies. Never combine ok with another label.\n"
+    "Reply with ONE line: the applicable labels separated by commas.\n"
+    "Do not describe the image. Do not explain."
+)
+
+# Kanoniskt namn per stavning modellen faktiskt använder. Nycklarna är
+# gemener med enkla blanksteg; "blurred" och "slightly blurry" fanns i svaren
+# men matchade aldrig BAD_CATEGORIES, som bara innehåller "blurry".
+CHAT_ALIASES = {
+    "screenshot": "screenshot",
+    "screen shot": "screenshot",
+    "screen capture": "screenshot",
+    "photo of screen": "photo_of_screen",
+    "photo_of_screen": "photo_of_screen",
+    "screen photo": "photo_of_screen",
+    "low resolution": "low_resolution",
+    "low_resolution": "low_resolution",
+    "low quality": "low_quality",
+    "low_quality": "low_quality",
+    "blurry": "blurry",
+    "blurred": "blurry",
+    "blurry image": "blurry",
+    "blurred image": "blurry",
+    "slightly blurry": "blurry",
+    "out of focus": "blurry",
+    "document": "document",
+    "receipt": "document",
+    "scan": "document",
+    "ok": "ok",
+    "okay": "ok",
+}
+
+
+def _answer_chunks(text: str) -> list:
+    """Dela modellens svar i normaliserade bitar: gemener, ett blanksteg,
+    skiljetecken borta."""
+    return [" ".join(chunk.lower().strip().strip(".\"'()[]*_").split())
+            for chunk in re.split(r"[,;\n]", str(text))]
+
+
+def parse_categories(text: str) -> set:
+    """Översätt modellens svar till kanoniska kategorier.
+
+    Sluten vokabulär: bara ord ur CHAT_ALIASES räknas. Beskriver modellen bilden
+    i stället för att svara blir resultatet tomt och bilden routar till ok/ —
+    samma utfall som förut, men nu syns det i loggen i stället för att se ut som
+    ett svar. Ingen suddig substratmatchning här: den skulle släppa igenom
+    "screenshot" som ett löst ord i en beskrivning igen, vilket är precis vad
+    som fick foton att hamna i screenshots/.
+    """
+    found = set()
+    for key in _answer_chunks(text):
+        label = CHAT_ALIASES.get(key)
+        if label:
+            found.add(label)
+    # "ok" tillsammans med en riktig etikett betyder "inga problem" och ska inte
+    # konkurrera ut den riktiga etiketten.
+    if found - {"ok"}:
+        found.discard("ok")
+    return found
+
+
+def unknown_words(text: str) -> list:
+    """Ord modellen skrev som inte finns i vokabulären — underlag för loggen, så
+    att ett icke följt svar syns per bild i stället för bara som ett dåligt facit."""
+    return [key for key in _answer_chunks(text) if key and key not in CHAT_ALIASES]
 
 if CLASSIFIER not in ("chat", "clef"):
     sys.exit(f"CLASSIFIER måste vara 'chat' eller 'clef', inte {CLASSIFIER!r}")
@@ -158,16 +255,11 @@ def classify_image(image_path: str) -> str:
     print(f"📸 Classifying image: {image_path}")
     img = Image(value=Path(image_path))  # Use Path directly
 
-    prompt = (
-        "You are an image quality classifier. Look extra for screenshots and blurry images.\n"
-        "Analyze the image and return ONLY a comma separated list of categories"
-    )
-
     response = client.chat(
         model=MODEL,
         messages=[{
             'role': 'user',
-            'content': prompt,
+            'content': CHAT_PROMPT,
             'images': [img]
         }]
     )
@@ -228,16 +320,11 @@ def second_opinion(image_path: str) -> set:
     """Låt en annan modell svara på samma bild. Returnerar dess kategorier."""
     print(f"🧐 Second opinion ({SECOND_MODEL}): {image_path}")
     img = Image(value=Path(image_path))
-    prompt = (
-        "You are an image quality classifier. Look extra for screenshots and blurry images.\n"
-        "Analyze the image and return ONLY a comma separated list of categories"
-    )
     response = client.chat(
         model=SECOND_MODEL,
-        messages=[{'role': 'user', 'content': prompt, 'images': [img]}],
+        messages=[{'role': 'user', 'content': CHAT_PROMPT, 'images': [img]}],
     )
-    text = response['message']['content'].strip().lower()
-    return {c.strip() for c in text.split(",") if c.strip()}
+    return parse_categories(response['message']['content'].strip().lower())
 
 
 def get_unique_path(path: str) -> str:
@@ -265,9 +352,14 @@ def pick_folder(categories: set) -> str:
     # chat-lanen får samma tre hinkar: en skärmdump är skräp, men den ska inte
     # blandas ihop med suddiga foton. Kontrollera före BAD_CATEGORIES — modellen
     # kan svara "screenshot", och den kategorin står i båda listorna.
-    if any(category in categories for category in SCREENSHOT_CATEGORIES):
+    #
+    # Jämförelsen normaliseras: prompten erbjuder "low_resolution" medan
+    # BAD_CATEGORIES i .env stavar "low resolution" med blanksteg. Utan detta
+    # slutar en etikett att matcha i samma stund modellen börjar följa prompten.
+    normalized = {c.replace(" ", "_") for c in categories}
+    if any(category in normalized for category in SCREENSHOT_NORMALIZED):
         return SCREENSHOT_FOLDER
-    if any(category in categories for category in BAD_CATEGORIES):
+    if any(category in normalized for category in BAD_NORMALIZED):
         return BAD_FOLDER
     return OK_FOLDER
 
@@ -290,9 +382,9 @@ def resolve(categories: set, confidence: float | None,
         print(f"⚠️ Second opinion misslyckades ({e}) — behåller Clef")
         return categories, "clef"
 
-    # Andra modellen svarar i sin egen vokabulär. Normalisera till gemensamma
-    # kategorinamn så att jämförelsen mot CLEF_BAD/MOVEMAP blir rättvisande.
-    alt = {c.replace(" ", "_") for c in alt}
+    # Andra modellen svarar genom parse_categories, så alt är redan kanoniska
+    # namn (gemener, understreck) och går att jämföra direkt mot CLEF_BAD.
+    alt = set(alt)
 
     if SECOND_MODE == "override":
         print(f"🔀 Second opinion ersätter: Clef={categories or '{}'} → {alt or '{}'}")
@@ -331,8 +423,14 @@ def classify_and_log(filename: str) -> tuple[set, str | None] | None:
                   f"(confidence={confidence}, spår={lane})")
             return categories, lane
         answer = classify_image(file_path)
-        print(f"✅ Classified as: {answer}")
-        return {c.strip() for c in str(answer).split(",") if c.strip()}, None
+        categories = parse_categories(answer)
+        # Råsvaret skrivs ut tillsammans med det tolkade, och orden utanför
+        # vokabulären pekas ut: då syns ett icke följt svar per bild i stället
+        # för att bara bli ett tyst felval.
+        stray = unknown_words(answer)
+        print(f"✅ Classified as: {categories or '{}'}  (raw: {answer})"
+              + (f"  ⚠️ okända ord: {stray}" if stray else ""))
+        return categories, None
     except Exception as e:
         print(f"⚠️ Error processing {filename}: {e}")
         return None

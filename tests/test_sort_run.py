@@ -1,6 +1,6 @@
 """End-to-end check of sort_images() against a fake model — no Ollama, no images.
 
-    python test_sort_run.py
+    python tests/test_sort_run.py
 
 The chat lane hands the *path* to the model and never opens the file, so empty
 files plus a stub client exercise the whole loop: classify -> route -> move. The
@@ -17,7 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 
-SRC = Path(__file__).with_name("sort-images.py")
+# tests/ ligger under repo-roten, där sort-images.py bor.
+SRC = Path(__file__).resolve().parents[1] / "sort-images.py"
 
 # Filename prefix -> what the fake model answers.
 ANSWERS = {
