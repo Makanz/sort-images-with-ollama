@@ -7,6 +7,8 @@ Two lanes, chosen with `CLASSIFIER` in `.env`:
 
 - **`chat`** (default) — an ordinary chat model replies with a comma separated
   list of categories. Works with any vision model (`gemma3:4b`, `llava`, …).
+  Screenshots land in their own folder here too, whenever the model names
+  `screenshot` (or another word from `SCREENSHOT_CATEGORIES`).
 - **`clef`** — a [Cloudflare Clef](https://blog.cloudflare.com/clef-decision-models/)
   decision model answers a *typed schema* in a single pass via Ollama's
   `/v1/systemone` endpoint and returns calibrated probabilities instead of free
@@ -59,7 +61,9 @@ sort-images-with-ollama
 | `INPUT_FOLDER` | `images` | folder to sort |
 | `BAD_QUALITY_FOLDER_NAME` | `bad_quality` | destination for junk |
 | `OK_QUALITY_FOLDER_NAME` | `ok` | destination for keepers |
+| `SCREENSHOT_FOLDER_NAME` | `screenshots` | destination for screenshots, both lanes |
 | `BAD_CATEGORIES` | `screenshot,blurry,low resolution,low quality` | chat-lane keyword match |
+| `SCREENSHOT_CATEGORIES` | `screenshot,photo of screen` | chat-lane keywords routed to `screenshots` instead of `bad_quality` |
 | `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
 | `CLEF_MAX_PX` | `768` | downscale before sending to Clef (768 is the measured sweet spot) |
 | `BLUR_THRESHOLD` | `0.9` | blur probability above which an image is junk (0.9 = 0 false positives measured) |
@@ -107,6 +111,10 @@ compare them without re-running anything.
    - `images/bad_quality/` — blurry, low resolution, documents
    - `images/ok/` — keepers
 
+Both lanes produce all three folders. In the chat lane a screenshot goes to
+`screenshots/` instead of `bad_quality/`, so junk screenshots can be swept
+without touching genuinely blurry photos.
+
 Files already in a destination folder, and non-images, are left alone. An
 existing file is never overwritten — a numeric suffix is added instead.
 
@@ -151,6 +159,8 @@ Two caveats worth stating plainly:
 - Edit `CLEF_QUESTIONS` in `sort-images.py` to change the schema Clef answers,
   and `CLEF_MOVE_MAP` to change where each answer goes.
 - Edit the prompt in `classify_image()` for the chat lane.
+- Edit `SCREENSHOT_CATEGORIES` to change which chat-lane words route to
+  `screenshots/`, and `SCREENSHOT_FOLDER_NAME` to rename the folder.
 - Adjust `BLUR_THRESHOLD` and `CLEF_MAX_PX` to trade accuracy for speed.
 
 ## Troubleshooting
