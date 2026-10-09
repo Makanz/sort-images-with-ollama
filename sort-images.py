@@ -21,7 +21,7 @@ import io
 import os
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -351,19 +351,26 @@ def sort_images():
         print(f"🧵 {WORKERS} parallella anrop (kräver OLLAMA_NUM_PARALLEL>={WORKERS})")
 
     # Klassificeringen är det som tar tid och går att köra parallellt. Flytten
-    # sker i huvudtråden: get_unique_path() kollar existens och är inte atomär.
+    # sker i huvudtråden, så fort just den bilden är klar: get_unique_path()
+    # kollar existens och är inte atomär, och en flytt per bild gör att mappen
+    # fylls under körningen — avbryter man halvvägs är arbetet inte förlorat.
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        classified = list(pool.map(classify_and_log, filenames))
-
-    moved = 0
-    for filename, result in zip(filenames, classified):
-        if result is None:
-            continue
-        categories, _lane = result
-        destination_path = get_unique_path(
-            os.path.join(pick_folder(categories), filename))
-        shutil.move(os.path.join(INPUT_FOLDER, filename), destination_path)
-        moved += 1
+        futures = {pool.submit(classify_and_log, name): name for name in filenames}
+        moved = 0
+        for future in as_completed(futures):
+            filename = futures[future]
+            try:
+                result = future.result()
+            except Exception as e:  # oväntat fel utanför klassificerarens egen try
+                print(f"⚠️ Error processing {filename}: {e}")
+                continue
+            if result is None:
+                continue
+            categories, _lane = result
+            destination_path = get_unique_path(
+                os.path.join(pick_folder(categories), filename))
+            shutil.move(os.path.join(INPUT_FOLDER, filename), destination_path)
+            moved += 1
     print(f"✅ Sorterade {moved} av {len(filenames)} bilder.")
 
 

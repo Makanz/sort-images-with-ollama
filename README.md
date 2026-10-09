@@ -106,7 +106,9 @@ Watch `ollama ps` while it runs. If `PROCESSOR` drops below `100% GPU`, the extr
 slots pushed part of the model into system RAM and the run got slower.
 
 Only classification is threaded. The move stays on the main thread, because
-`get_unique_path()` checks for an existing file and is not atomic.
+`get_unique_path()` checks for an existing file and is not atomic — but it happens
+as each image finishes, not in one batch at the end, so the destination folders
+fill up during the run and an interrupted run keeps what it already did.
 
 ## Second opinion
 
