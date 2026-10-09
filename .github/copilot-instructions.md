@@ -11,7 +11,9 @@ Everything hinges on `CLASSIFIER` in `.env`:
 
 - **`chat`** — `client.chat()` with a vision model. The model returns free text
   and the script does a substring match against `BAD_CATEGORIES`. Cheap, any
-  model, but the answer shape is not guaranteed.
+  model, but the answer shape is not guaranteed. A word from
+  `SCREENSHOT_CATEGORIES` routes the image to `screenshots/` before
+  `BAD_CATEGORIES` gets a say, so both lanes produce the same three folders.
 - **`clef`** — `POST /v1/systemone` with a typed question schema. The model
   returns calibrated probabilities per option. This is a *decision model*, not
   a chat model: it does one non-autoregressive forward pass. Requires Ollama
@@ -44,7 +46,10 @@ new enough Ollama or a big enough GPU.
 
 ## Testing
 
-There is no committed test suite. Verify changes end-to-end against a local
-Ollama: put a screenshot, a blurred photo and a sharp photo in `images/`, run
-the script, confirm they land in different folders. For the clef lane, start
-with `python clef_bench.py <folder> --smoke`.
+`python test_routing.py` checks the folder routing with no Ollama and no images
+— it is the fast check for any change to `pick_folder()`.
+
+Everything else is verified end-to-end against a local Ollama: put a
+screenshot, a blurred photo and a sharp photo in `images/`, run the script,
+confirm they land in different folders. For the clef lane, start with
+`python clef_bench.py <folder> --smoke`.

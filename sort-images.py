@@ -54,6 +54,7 @@ CLASSIFIER = os.getenv('CLASSIFIER', 'chat').strip().lower()
 INPUT_FOLDER = os.getenv('INPUT_FOLDER', 'images')
 BAD_QUALITY_FOLDER_NAME = os.getenv('BAD_QUALITY_FOLDER_NAME', 'bad_quality')
 OK_QUALITY_FOLDER_NAME = os.getenv('OK_QUALITY_FOLDER_NAME', 'ok')
+SCREENSHOT_FOLDER_NAME = os.getenv('SCREENSHOT_FOLDER_NAME', 'screenshots')
 MAX_PX = int(os.getenv('CLEF_MAX_PX', '1280'))
 BLUR_THRESHOLD = float(os.getenv('BLUR_THRESHOLD', '0.5'))
 
@@ -66,6 +67,7 @@ SECOND_MODE = os.getenv('SECOND_OPINION_MODE', 'veto').strip().lower()
 
 BAD_FOLDER = os.path.join(INPUT_FOLDER, BAD_QUALITY_FOLDER_NAME)
 OK_FOLDER = os.path.join(INPUT_FOLDER, OK_QUALITY_FOLDER_NAME)
+SCREENSHOT_FOLDER = os.path.join(INPUT_FOLDER, SCREENSHOT_FOLDER_NAME)
 
 # 📂 Stöd för bildformat
 raw_extensions = os.getenv("SUPPORTED_EXTENSIONS",
@@ -79,6 +81,15 @@ raw_bad_categories = os.getenv(
     "BAD_CATEGORIES", "screenshot,blurry,low resolution,low quality")
 BAD_CATEGORIES = set(
     cat.strip().lower() for cat in raw_bad_categories.split(",") if cat.strip()
+)
+
+# 📸 chat-lanen: kategorier som ska till skärmdumpsmappen i stället för
+# bad_quality. Läses före BAD_CATEGORIES eftersom "screenshot" står i båda.
+raw_screenshot_categories = os.getenv(
+    "SCREENSHOT_CATEGORIES", "screenshot,photo of screen")
+SCREENSHOT_CATEGORIES = set(
+    cat.strip().lower() for cat in raw_screenshot_categories.split(",")
+    if cat.strip()
 )
 
 # 🧠 Klient
@@ -134,8 +145,7 @@ print(f"🔄 Sorting images... (classifier: {CLASSIFIER})")
 # Create folders
 os.makedirs(BAD_FOLDER, exist_ok=True)
 os.makedirs(OK_FOLDER, exist_ok=True)
-if CLASSIFIER == "clef":
-    os.makedirs(os.path.join(INPUT_FOLDER, "screenshots"), exist_ok=True)
+os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
 
 
 def classify_image(image_path: str) -> str:
@@ -247,6 +257,11 @@ def pick_folder(categories: set) -> str:
                 name = CLEF_MOVE_MAP.get(cat, BAD_QUALITY_FOLDER_NAME)
                 return os.path.join(INPUT_FOLDER, name)
         return OK_FOLDER
+    # chat-lanen får samma tre hinkar: en skärmdump är skräp, men den ska inte
+    # blandas ihop med suddiga foton. Kontrollera före BAD_CATEGORIES — modellen
+    # kan svara "screenshot", och den kategorin står i båda listorna.
+    if any(category in categories for category in SCREENSHOT_CATEGORIES):
+        return SCREENSHOT_FOLDER
     if any(category in categories for category in BAD_CATEGORIES):
         return BAD_FOLDER
     return OK_FOLDER
