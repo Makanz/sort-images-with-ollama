@@ -10,8 +10,8 @@ Two lanes, chosen with `CLASSIFIER` in `.env`:
 - **`clef`** — a [Cloudflare Clef](https://blog.cloudflare.com/clef-decision-models/)
   decision model answers a *typed schema* in a single pass via Ollama's
   `/v1/systemone` endpoint and returns calibrated probabilities instead of free
-  text. Needs Ollama ≥ 0.35.1. `clef-flash` (9B, ~11 GB) fits a 12 GB GPU;
-  `clef:27b` (~18 GB) needs 24 GB or will spill into system RAM.
+  text. Needs Ollama ≥ 0.35.1. `clef-flash` (9B, ~11 GB) fits a 12 GB GPU and is the recommended
+  variant; `clef:27b` (~18 GB) needs 24 GB or will spill into system RAM.
 
 `clef_bench.py` measures either lane against a known-good answer key, so you can
 see whether a model actually beats a simple heuristic before trusting it.
@@ -61,8 +61,8 @@ sort-images-with-ollama
 | `OK_QUALITY_FOLDER_NAME` | `ok` | destination for keepers |
 | `BAD_CATEGORIES` | `screenshot,blurry,low resolution,low quality` | chat-lane keyword match |
 | `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
-| `CLEF_MAX_PX` | `1280` | downscale before sending to Clef |
-| `BLUR_THRESHOLD` | `0.5` | blur probability above which an image is junk |
+| `CLEF_MAX_PX` | `768` | downscale before sending to Clef (768 is the measured sweet spot) |
+| `BLUR_THRESHOLD` | `0.9` | blur probability above which an image is junk (0.9 = 0 false positives measured) |
 | `SECOND_OPINION` | *(empty)* | set to `clef` to enable the second-opinion lane |
 | `SECOND_OPINION_MODEL` | `gemma3:4b` | any vision chat model (`gemma3:4b`, `moondream`, `llava:7b`) |
 | `SECOND_OPINION_THRESHOLD` | `0.8` | escalate when Clef's confidence falls below this |
@@ -182,7 +182,31 @@ Issues and pull requests are welcome.
 
 MIT — see [LICENSE](LICENSE).
 
-## Known blocker: clef-flash on Windows
+## Known blocker: clef-flash on Windows — RESOLVED, and the earlier analysis was wrong
+
+**Update 2026-10-09 (Ollama 0.40.2, RTX 3060 12 GB, Windows): `clef-flash` works.**
+A live probe of 28 images with an exact answer key scored **28/28 correct image
+type** (photo / screenshot / photo-of-screen), **0 false positives**, and **8/8
+blurry photos** at `BLUR_THRESHOLD=0.9`. Every earlier claim below about
+`clef-flash` being broken on Windows, and about Clef being text-only, is
+disproven on this version.
+
+Two things to take from that:
+
+- **A capability string is a claim; an image POST is a finding.** `clef-flash`
+  and `clef:27b` both report `capabilities: ['decision','vision']` and both
+  accept `images`. `tev1` reports `['decision']` and rejects images with
+  `400 "image inputs are not supported by this decision model"` — that is the
+  text-only one.
+- **A bug report rots.** Verify with the exact failing call before repeating a
+  blocker to a user.
+
+Prefer `clef-flash` over `clef:27b`: identical answers on the corpus, but 2.7 s
+vs 4.7 s median per image, and it fits entirely in 12 GB VRAM while 27b spills
+~10 GB to system RAM.
+
+<details>
+<summary>Superseded 2026-10-09 — the original (incorrect) blocker analysis</summary>
 
 As of Ollama 0.35.1, `clef-flash` fails on **every** `/v1/systemone` request on
 Windows with HTTP 500 `Clef: non-finite logit`. It is not a memory problem — the
@@ -203,8 +227,10 @@ Options are WSL2, or a chat lane instead:
 - `CLASSIFIER=chat` with a vision model — the original lane, unaffected.
 - `CLASSIFIER=clef` against a WSL2 Ollama (`--host http://<wsl-ip>:11434`).
 
-Verify before debugging anything else:
+</details>
+
+If you do ever hit the old 500, verify before debugging anything else:
 
 ```bash
-python clef_bench.py <folder> --smoke    # 500 here means the upstream bug
+python clef_bench.py <folder> --smoke    # a 500 here means an upstream regression
 ```
