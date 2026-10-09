@@ -21,6 +21,7 @@ import io
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -55,6 +56,10 @@ INPUT_FOLDER = os.getenv('INPUT_FOLDER', 'images')
 BAD_QUALITY_FOLDER_NAME = os.getenv('BAD_QUALITY_FOLDER_NAME', 'bad_quality')
 OK_QUALITY_FOLDER_NAME = os.getenv('OK_QUALITY_FOLDER_NAME', 'ok')
 SCREENSHOT_FOLDER_NAME = os.getenv('SCREENSHOT_FOLDER_NAME', 'screenshots')
+# Parallella anrop. Ger bara något om servern kör OLLAMA_NUM_PARALLEL >= WORKERS
+# OCH modellen lämnar VRAM över till flera samtidiga slots — annars köar bara
+# anropen hos Ollama. Se README: "Parallel workers".
+WORKERS = max(1, int(os.getenv('WORKERS', '1')))
 MAX_PX = int(os.getenv('CLEF_MAX_PX', '1280'))
 BLUR_THRESHOLD = float(os.getenv('BLUR_THRESHOLD', '0.5'))
 
@@ -314,39 +319,52 @@ def resolve(categories: set, confidence: float | None,
     return categories, "clef"
 
 
+def classify_and_log(filename: str) -> tuple[set, str | None] | None:
+    """Klassificera en bild i INPUT_FOLDER. None = hoppa över (fel)."""
+    file_path = os.path.join(INPUT_FOLDER, filename)
+    print(f"🔍 Processing {filename}...")
+    try:
+        if CLASSIFIER == "clef":
+            categories, confidence = classify_image_clef(file_path)
+            categories, lane = resolve(categories, confidence, file_path)
+            print(f"✅ Classified as: {categories or '{}'}  "
+                  f"(confidence={confidence}, spår={lane})")
+            return categories, lane
+        answer = classify_image(file_path)
+        print(f"✅ Classified as: {answer}")
+        return {c.strip() for c in str(answer).split(",") if c.strip()}, None
+    except Exception as e:
+        print(f"⚠️ Error processing {filename}: {e}")
+        return None
+
+
 def sort_images():
-    for filename in os.listdir(INPUT_FOLDER):
-        file_path = os.path.join(INPUT_FOLDER, filename)
+    filenames = sorted(
+        name for name in os.listdir(INPUT_FOLDER)
+        if os.path.isfile(os.path.join(INPUT_FOLDER, name))
+        and is_supported_image(name)
+    )
+    if not filenames:
+        print("📂 Inga bilder att sortera.")
+        return
+    if WORKERS > 1:
+        print(f"🧵 {WORKERS} parallella anrop (kräver OLLAMA_NUM_PARALLEL>={WORKERS})")
 
-        print(f"🔍 Checking {filename}...")
+    # Klassificeringen är det som tar tid och går att köra parallellt. Flytten
+    # sker i huvudtråden: get_unique_path() kollar existens och är inte atomär.
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        classified = list(pool.map(classify_and_log, filenames))
 
-        # Skip non-image files or directories
-        if not os.path.isfile(file_path):
+    moved = 0
+    for filename, result in zip(filenames, classified):
+        if result is None:
             continue
-        if not is_supported_image(filename):
-            continue
-
-        print(f"🔍 Processing {filename}...")
-        try:
-            if CLASSIFIER == "clef":
-                categories, confidence = classify_image_clef(file_path)
-                categories, lane = resolve(categories, confidence, file_path)
-                print(f"✅ Classified as: {categories or '{}'}  "
-                      f"(confidence={confidence}, spår={lane})")
-            else:
-                categories = classify_image(file_path)
-                print(f"✅ Classified as: {categories}")
-        except Exception as e:
-            print(f"⚠️ Error processing {filename}: {e}")
-            continue
-
-        target_folder = pick_folder(categories if isinstance(categories, set)
-                                    else {c.strip() for c in str(categories).split(",")})
-
+        categories, _lane = result
         destination_path = get_unique_path(
-            os.path.join(target_folder, filename))
-
-        shutil.move(file_path, destination_path)
+            os.path.join(pick_folder(categories), filename))
+        shutil.move(os.path.join(INPUT_FOLDER, filename), destination_path)
+        moved += 1
+    print(f"✅ Sorterade {moved} av {len(filenames)} bilder.")
 
 
 if __name__ == "__main__":

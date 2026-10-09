@@ -67,10 +67,46 @@ sort-images-with-ollama
 | `SUPPORTED_EXTENSIONS` | `.jpg,.jpeg,.png,.bmp,.webp,.heic,.heif` | file filter |
 | `CLEF_MAX_PX` | `768` | downscale before sending to Clef (768 is the measured sweet spot) |
 | `BLUR_THRESHOLD` | `0.9` | blur probability above which an image is junk (0.9 = 0 false positives measured) |
+| `WORKERS` | `1` | parallel classification requests — see [Parallel workers](#parallel-workers) |
 | `SECOND_OPINION` | *(empty)* | set to `clef` to enable the second-opinion lane |
 | `SECOND_OPINION_MODEL` | `gemma3:4b` | any vision chat model (`gemma3:4b`, `moondream`, `llava:7b`) |
 | `SECOND_OPINION_THRESHOLD` | `0.8` | escalate when Clef's confidence falls below this |
 | `SECOND_OPINION_MODE` | `veto` | `veto`, `agree` or `override` — see below |
+
+## Parallel workers
+
+`WORKERS` runs that many classifications at once. It is off by default and only
+pays off in a narrow setup, because Ollama serves one request per model at a
+time: `OLLAMA_NUM_PARALLEL` defaults to `1`, and the memory an extra slot needs
+scales with `OLLAMA_NUM_PARALLEL × context length`
+([Ollama FAQ](https://docs.ollama.com/faq)).
+
+Two conditions, both required:
+
+1. **The server must allow it.** Set `OLLAMA_NUM_PARALLEL` to at least `WORKERS`
+   as an environment variable *on the machine running Ollama* and restart it. On
+   Windows: System settings → Environment Variables, then quit and restart
+   Ollama from the tray icon. Without this the requests just queue, and `WORKERS`
+   adds threads and nothing else.
+2. **The model must leave VRAM over.** `clef-flash` is ~11 GB, so on a 12 GB card
+   there is no room for a second slot — a `clef` run should stay at `WORKERS=1`.
+   A small chat model does fit: `gemma3:4b` (~3 GB) leaves ~9 GB, which is the
+   configuration worth trying.
+
+Measure before trusting it. Classification is GPU work, and a saturated GPU
+divides the same silicon instead of creating more — run the same folder twice and
+compare wall clock:
+
+```bash
+python sort-images.py   # WORKERS=1
+python sort-images.py   # WORKERS=4
+```
+
+Watch `ollama ps` while it runs. If `PROCESSOR` drops below `100% GPU`, the extra
+slots pushed part of the model into system RAM and the run got slower.
+
+Only classification is threaded. The move stays on the main thread, because
+`get_unique_path()` checks for an existing file and is not atomic.
 
 ## Second opinion
 

@@ -32,7 +32,9 @@ new enough Ollama or a big enough GPU.
 - `ollama.systemone()` is the documented API name and `keep_alive` is accepted
   by the endpoint, but neither is guaranteed on older servers. Fail loudly.
 - Sort by *moving*, never deleting. `get_unique_path()` must stay in the write
-  path — never overwrite an existing file.
+  path — never overwrite an existing file. Name check plus move is not atomic, so
+  only the main thread may call them: classification runs in a pool, moving does
+  not.
 - Do not add a dependency on `opencv`, `imagehash` or any heuristic library to
   the sorter. The point of this repo is the model lane; deterministic heuristics
   live in a separate project.
@@ -48,6 +50,11 @@ new enough Ollama or a big enough GPU.
 
 `python test_routing.py` checks the folder routing with no Ollama and no images
 — it is the fast check for any change to `pick_folder()`.
+
+`python test_sort_run.py` runs `sort_images()` end to end against a stub client
+and demands the same three folders at `WORKERS=1` and `WORKERS=4`. Also no Ollama
+and no real images: the chat lane hands the *path* to the model and never opens
+the file, so empty files are enough.
 
 Everything else is verified end-to-end against a local Ollama: put a
 screenshot, a blurred photo and a sharp photo in `images/`, run the script,
