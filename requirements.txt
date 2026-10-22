@@ -1,11 +1,11 @@
 # Kärnberoenden (båda lanes)
 ollama>=0.6.3
-python-dotenv>=1.0.0
+python-dotenv>=1.2.4
 
 # Behövs för clef-lane (rå HTTP mot /v1/systemone, inkl. bilder)
 # samt för clef_bench.py
-requests>=2.32.0
-pillow>=10.0.0
+requests>=2.34.2
+pillow>=13.0.0
 
 # HEIC/HEIF (iPhone/Android-standard). Utan denna hoppas .heic över.
-pillow-heif>=0.18.0
+pillow-heif>=1.8.1
